@@ -1,0 +1,12 @@
+services:
+  bot:
+    build: .
+    container_name: diary_bot
+    restart: always
+    env_file:
+      - .env
+    volumes:
+      # Связываем базы данных с сервером (чтобы не пропали при перезапуске)
+      - .:/app
+    environment:
+      - PYTHONUNBUFFERED=1
