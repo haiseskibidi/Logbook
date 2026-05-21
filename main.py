@@ -6,7 +6,6 @@ from dotenv import load_dotenv
 from aiogram import Bot, Dispatcher
 from aiogram.types import BotCommand
 from handlers import router
-from database import init_db
 import scheduler
 
 # Загрузка переменных окружения
@@ -18,7 +17,6 @@ async def set_commands(bot: Bot):
         BotCommand(command="start", description="Главное меню"),
         BotCommand(command="remind", description="Создать напоминание"),
         BotCommand(command="reminders", description="Список напоминаний"),
-        BotCommand(command="read", description="Записи в дневнике"),
     ]
     await bot.set_my_commands(commands)
 
@@ -38,8 +36,7 @@ async def main():
     scheduler.set_bot(bot)
     scheduler.scheduler.start()
 
-    # Инициализация базы данных и команд
-    await init_db()
+    # Инициализация команд
     await set_commands(bot)
 
     try:

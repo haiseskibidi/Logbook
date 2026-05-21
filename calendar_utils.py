@@ -3,9 +3,15 @@ from datetime import datetime
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 def get_calendar(year: int = None, month: int = None):
-    now = datetime.now()
-    if year is None: year = now.year
-    if month is None: month = now.month
+    from scheduler import tz
+    now = datetime.now(tz)
+    
+    today_day = now.day
+    today_month = now.month
+    today_year = now.year
+
+    if year is None: year = today_year
+    if month is None: month = today_month
 
     month_name = ["Январь", "Февраль", "Март", "Апрель", "Май", "Июнь", 
                   "Июль", "Август", "Сентябрь", "Октябрь", "Ноябрь", "Декабрь"][month-1]
@@ -22,8 +28,17 @@ def get_calendar(year: int = None, month: int = None):
         for day in week:
             if day == 0:
                 row.append(InlineKeyboardButton(text=" ", callback_data="ignore"))
+            elif day == today_day and month == today_month and year == today_year:
+                row.append(InlineKeyboardButton(
+                    text=f"• {day} •",
+                    callback_data=f"calendar_day:{year}-{month:02d}-{day:02d}",
+                    style="success"
+                ))
             else:
-                row.append(InlineKeyboardButton(text=str(day), callback_data=f"calendar_day:{year}-{month:02d}-{day:02d}"))
+                row.append(InlineKeyboardButton(
+                    text=str(day),
+                    callback_data=f"calendar_day:{year}-{month:02d}-{day:02d}"
+                ))
         keyboard.append(row)
 
     prev_month = month - 1 if month > 1 else 12

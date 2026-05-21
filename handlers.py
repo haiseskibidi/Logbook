@@ -8,7 +8,6 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from datetime import datetime
 from scheduler import tz
-import database
 import scheduler
 from calendar_utils import get_calendar
 
@@ -22,10 +21,9 @@ class RemindStates(StatesGroup):
 # --- Клавиатуры ---
 
 def get_main_reply_keyboard():
-    # Постоянная нижняя клавиатура
+    # Постоянная нижняя клавиатура с кнопками напоминаний
     keyboard = [
-        [KeyboardButton(text="📔 Написать в дневник"), KeyboardButton(text="🔔 Напоминание")],
-        [KeyboardButton(text="📑 Просмотр записей"), KeyboardButton(text="📋 Список напоминаний")]
+        [KeyboardButton(text="🔔 Напоминание"), KeyboardButton(text="📋 Список напоминаний")]
     ]
     return ReplyKeyboardMarkup(keyboard=keyboard, resize_keyboard=True)
 
@@ -55,9 +53,9 @@ def get_time_keyboard(page: int = 0):
 @router.message(Command("start"))
 async def start_cmd(message: Message):
     text = (
-        "👋 *Добро пожаловать в твой личный дневник!*\n\n"
-        "Я помогу тебе сохранять важные мысли и не забывать о делах.\n\n"
-        "💡 _Совет: Просто отправь мне любое сообщение, чтобы сохранить его в дневник._"
+        "👋 *Добро пожаловать в твой личный менеджер напоминаний!*\n\n"
+        "Я помогу тебе не забыть о важных делах.\n\n"
+        "💡 _Совет: Просто отправь мне любое текстовое сообщение (например, «Позвонить маме»), чтобы быстро настроить напоминание на нужный день и время!_"
     )
     # Отправляем ОДНО сообщение с нижней клавиатурой
     await message.answer(
@@ -68,17 +66,9 @@ async def start_cmd(message: Message):
 
 # --- Обработка Reply-кнопок ---
 
-@router.message(F.text == "📔 Написать в дневник")
-async def reply_diary(message: Message):
-    await message.answer("Просто напиши мне текст сообщения, и я тут же сохраню его в твой дневник! ✍️")
-
 @router.message(F.text == "🔔 Напоминание")
 async def reply_remind(message: Message, state: FSMContext):
     await start_remind_cmd(message, state)
-
-@router.message(F.text == "📑 Просмотр записей")
-async def reply_read(message: Message):
-    await show_diary_entries(message, message.from_user.id, datetime.now(tz).strftime("%Y-%m-%d"))
 
 @router.message(F.text == "📋 Список напоминаний")
 async def reply_reminders(message: Message):
@@ -117,6 +107,34 @@ async def process_calendar_nav(callback: CallbackQuery):
 async def process_time_select(callback: CallbackQuery, state: FSMContext):
     selected_time = callback.data.split("|")[1]
     await state.update_data(remind_time=selected_time)
+    
+    # Если текст напоминания уже введен заранее
+    data = await state.get_data()
+    if 'remind_text' in data:
+        remind_date = data['remind_date']
+        remind_text = data['remind_text']
+        try:
+            from scheduler import tz
+            run_time_naive = datetime.strptime(f"{remind_date} {selected_time}", "%Y-%m-%d %H:%M")
+            run_time = tz.localize(run_time_naive)
+            
+            if run_time < datetime.now(tz):
+                await callback.message.edit_text("⚠️ Это время уже в прошлом! Попробуйте снова или выберите другую дату/время.")
+                await callback.answer()
+                return
+                
+            scheduler.schedule_reminder(callback.message.chat.id, run_time, remind_text)
+            await callback.message.edit_text(
+                f"✅ *Напоминание готово!*\n\n📅 `{remind_date}` 🕒 `{selected_time}`\n📝 {remind_text}",
+                parse_mode="Markdown"
+            )
+            await state.clear()
+        except Exception as e:
+            await callback.message.edit_text(f"❌ Ошибка: {e}")
+            await state.clear()
+        await callback.answer()
+        return
+
     await state.set_state(RemindStates.waiting_for_text)
     await callback.message.edit_text(f"🕒 Время: *{selected_time}*\n\n✍️ Введите текст напоминания:", parse_mode="Markdown")
     await callback.answer()
@@ -129,6 +147,29 @@ async def process_time_manual(message: Message, state: FSMContext):
     try:
         datetime.strptime(time_text, "%H:%M")
         await state.update_data(remind_time=time_text)
+        
+        # Если текст напоминания уже введен заранее
+        data = await state.get_data()
+        if 'remind_text' in data:
+            remind_date = data['remind_date']
+            remind_text = data['remind_text']
+            
+            from scheduler import tz
+            run_time_naive = datetime.strptime(f"{remind_date} {time_text}", "%Y-%m-%d %H:%M")
+            run_time = tz.localize(run_time_naive)
+            
+            if run_time < datetime.now(tz):
+                await message.answer("⚠️ Это время уже в прошлом! Попробуйте еще раз.")
+                return
+                
+            scheduler.schedule_reminder(message.chat.id, run_time, remind_text)
+            await message.answer(
+                f"✅ *Напоминание готово!*\n\n📅 `{remind_date}` 🕒 `{time_text}`\n📝 {remind_text}",
+                parse_mode="Markdown"
+            )
+            await state.clear()
+            return
+
         await state.set_state(RemindStates.waiting_for_text)
         await message.answer(f"🕒 Время: *{time_text}*\n\n✍️ Введите текст напоминания:", parse_mode="Markdown")
     except ValueError:
@@ -139,15 +180,10 @@ async def process_text(message: Message, state: FSMContext):
     data = await state.get_data()
     remind_date, remind_time = data['remind_date'], data['remind_time']
     try:
-        # Получаем объект таймзоны из планировщика
         from scheduler import tz
-        
-        # Создаем "наивный" объект времени
         run_time_naive = datetime.strptime(f"{remind_date} {remind_time}", "%Y-%m-%d %H:%M")
-        # Делаем его "осведомленным" (aware) в нужной таймзоне
         run_time = tz.localize(run_time_naive)
         
-        # Сравниваем с текущим временем в той же таймзоне
         if run_time < datetime.now(tz):
             return await message.answer("⚠️ Это время уже в прошлом!")
             
@@ -162,22 +198,6 @@ async def process_text(message: Message, state: FSMContext):
         await state.clear()
 
 # --- Просмотр и управление ---
-
-@router.message(Command("read"))
-async def read_cmd_handler(message: Message, command: CommandObject):
-    date_str = command.args or datetime.now().strftime("%Y-%m-%d")
-    await show_diary_entries(message, message.from_user.id, date_str)
-
-async def show_diary_entries(message: Message, user_id: int, date_str: str):
-    entries = await database.get_entries(user_id, date_str)
-    if not entries:
-        await message.answer(f"Записей за {date_str} не найдено. 😉")
-    else:
-        response = f"📅 *Твои записи за {date_str}:*\n\n"
-        for date, content in entries:
-            time_only = date.split()[1][:5]
-            response += f"🔹 `{time_only}`: {content}\n"
-        await message.answer(response, parse_mode="Markdown")
 
 @router.message(Command("reminders"))
 async def list_reminders_cmd(message: Message):
@@ -218,12 +238,19 @@ async def process_time_page(callback: CallbackQuery):
     await callback.message.edit_reply_markup(reply_markup=get_time_keyboard(page))
     await callback.answer()
 
-# --- Дневник ---
+# --- Авто-напоминания из текста ---
 
 @router.message(F.text & ~F.text.startswith('/'))
-async def diary_entry_handler(message: Message):
-    menu_buttons = {"📔 Написать в дневник", "🔔 Напоминание", "📑 Просмотр записей", "📋 Список напоминаний"}
+async def text_reminder_handler(message: Message, state: FSMContext):
+    menu_buttons = {"🔔 Напоминание", "📋 Список напоминаний"}
     if message.text in menu_buttons:
         return 
-    await database.add_entry(message.from_user.id, message.text)
-    await message.answer("✅ Записал в твой дневник!")
+        
+    await state.set_state(RemindStates.waiting_for_date)
+    await state.update_data(remind_text=message.text)
+    
+    await message.answer(
+        f"✍️ Текст напоминания: *\"{message.text}\"*\n\n📅 Выберите дату на календаре:",
+        parse_mode="Markdown",
+        reply_markup=get_calendar()
+    )
