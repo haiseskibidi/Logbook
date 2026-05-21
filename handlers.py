@@ -204,27 +204,63 @@ async def list_reminders_cmd(message: Message):
     await show_reminders(message)
 
 async def show_reminders(message: Message):
+    text, kb = get_reminders_content(message.chat.id)
+    await message.answer(text, parse_mode="Markdown", reply_markup=kb)
+
+def get_reminders_content(chat_id: int):
     jobs = scheduler.scheduler.get_jobs()
-    chat_id = message.chat.id
     user_jobs = [j for j in jobs if j.id.startswith(f"remind_{chat_id}_")]
+    user_jobs = sorted(user_jobs, key=lambda j: j.next_run_time)
+
     if not user_jobs:
-        await message.answer("У вас нет активных напоминаний. 📭")
+        return "У вас нет активных напоминаний. 📭", None
+
+    response = "🔔 *Ваши активные напоминания:*\n\n"
+    buttons = []
+    current_row = []
+    
+    for idx, job in enumerate(user_jobs, 1):
+        time_str = job.next_run_time.strftime("%d.%m.%Y %H:%M")
+        text = job.args[1] if len(job.args) > 1 else "Без текста"
+        response += f"{idx}️⃣ ⏰ `{time_str}` — {text}\n"
+        
+        btn = InlineKeyboardButton(text=f"❌ {idx}", callback_data=f"del_remind|{job.id}")
+        current_row.append(btn)
+        
+        if len(current_row) == 4:
+            buttons.append(current_row)
+            current_row = []
+            
+    if current_row:
+        buttons.append(current_row)
+
+    buttons.append([InlineKeyboardButton(text="🗑 Очистить всё", callback_data="clear_confirm", style="danger")])
+    return response, InlineKeyboardMarkup(inline_keyboard=buttons)
+
+@router.callback_query(F.data.startswith("del_remind|"))
+async def delete_single_reminder_cb(callback: CallbackQuery):
+    job_id = callback.data.split("|")[1]
+    job = scheduler.scheduler.get_job(job_id)
+    if job:
+        job.remove()
+        await callback.answer("✅ Напоминание удалено.")
     else:
-        response = "🔔 *Ваши активные напоминания:*\n\n"
-        for job in user_jobs:
-            time_str = job.next_run_time.strftime("%d.%m.%Y %H:%M")
-            text = job.args[1] if len(job.args) > 1 else "Без текста"
-            response += f"⏰ `{time_str}` — {text}\n"
-        kb = InlineKeyboardMarkup(inline_keyboard=[[InlineKeyboardButton(text="🗑 Очистить всё", callback_data="clear_confirm", style="danger")]])
-        await message.answer(response, parse_mode="Markdown", reply_markup=kb)
+        await callback.answer("⚠️ Напоминание уже удалено или не существует.", show_alert=True)
+        
+    text, kb = get_reminders_content(callback.message.chat.id)
+    if kb is None:
+        await callback.message.edit_text(text, reply_markup=None)
+    else:
+        await callback.message.edit_text(text, parse_mode="Markdown", reply_markup=kb)
 
 @router.callback_query(F.data == "clear_confirm")
 async def clear_confirm_cb(callback: CallbackQuery):
     chat_id = callback.message.chat.id
     for job in scheduler.scheduler.get_jobs():
         if job.id.startswith(f"remind_{chat_id}_"): job.remove()
-    await callback.message.edit_text("✅ Все напоминания удалены.")
+    await callback.message.edit_text("✅ Все напоминания удалены. 📭")
     await callback.answer()
+
 
 @router.callback_query(F.data == "cancel_remind")
 async def cancel_remind_cb(callback: CallbackQuery, state: FSMContext):
