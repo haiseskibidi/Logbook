@@ -30,7 +30,7 @@ def get_calendar(year: int = None, month: int = None):
                 row.append(InlineKeyboardButton(text=" ", callback_data="ignore"))
             elif day == today_day and month == today_month and year == today_year:
                 row.append(InlineKeyboardButton(
-                    text=f"• {day} •",
+                    text=str(day),
                     callback_data=f"calendar_day:{year}-{month:02d}-{day:02d}",
                     style="success"
                 ))
