@@ -34,6 +34,15 @@ async def send_reminder(chat_id: int, text: str):
 def schedule_reminder(chat_id: int, run_time: datetime, text: str):
     # Если run_time без часового пояса, APScheduler интерпретирует его в своей таймзоне
     job_id = f"remind_{chat_id}_{int(run_time.timestamp())}"
+    
+    # Проверяем, существует ли уже напоминание на это время
+    existing_job = scheduler.get_job(job_id)
+    if existing_job:
+        # Извлекаем старый текст (он хранится во втором аргументе args)
+        old_text = existing_job.args[1] if len(existing_job.args) > 1 else ""
+        if old_text:
+            text = f"{old_text}\n{text}"
+
     # Передаем только простые типы данных (int и str), которые легко сохраняются в БД
     scheduler.add_job(
         send_reminder,
